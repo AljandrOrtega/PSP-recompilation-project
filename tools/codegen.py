@@ -772,39 +772,50 @@ def main(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
     opts = [a for a in argv[1:] if a.startswith("--")]
     if len(args) < 2:
-        sys.stderr.write("usage: codegen.py <elf> <out.c> [--base=HEX]\n")
+        sys.stderr.write("usage: codegen.py <elf> <out.c> [--toml=functions.toml] [--base=HEX]\n")
         return 2
+
     base = None
+    toml_path = "build/mygame/functions.toml"  # O leerlo de los opts si lo pasas por parámetro
     for o in opts:
         if o.startswith("--base="):
             base = int(o.split("=", 1)[1], 16)
+        elif o.startswith("--toml="):
+            toml_path = o.split("=", 1)[1]
+
     elf = Elf(args[0], base=base)
-    ranges = exec_ranges(elf)
-    known, _ = analyze(elf)
 
-    # Cargar direcciones desde symbols.sym
-    sym_path = "build/mygame/symbols.sym"
-    import os
-    if os.path.exists(sym_path):
-        with open(sym_path, "r") as f:
-            for line in f:
-                line = line.strip().replace(",", " ")
-                parts = line.split()
-                if parts:
-                    try:
-                        addr = int(parts[0], 16)
-                        # Si las direcciones del sym son sin rebasar y usas base,
-                        # asegúrate de ajustar si es necesario.
-                        known.add(addr)
-                    except ValueError:
-                        pass
+    # En lugar de usar analyze(elf), cargamos las funciones desde tu TOML:
+    # Cargar el modelo desde el TOML
+    from analyze import load_toml
+    model = load_toml(toml_path)
 
-    # Depuración: ver qué direcciones se están considerando
-    print(f"Rangos ejecutables detectados: {ranges}")
-    print(f"Total direcciones recolectadas antes de filtrar: {len(known)}")
+    # Función auxiliar robusta para parsear direcciones desde el TOML (soporta int, hex-strings, etc.)
+    def parse_addr(val):
+        if isinstance(val, int):
+            return val
+        val_str = str(val).strip()
+        if val_str.startswith("0x") or val_str.startswith("0X"):
+            return int(val_str, 16)
+        return int(val_str)
 
-    known = set(a for a in known if in_ranges(a, ranges))
-    print(f"Total direcciones dentro de los rangos ejecutables: {len(known)}")
+    known = set(parse_addr(fn["addr"]) for fn in model["functions"] if fn.get("kind") == "function")
+    print(f"DEBUG: Se cargaron {len(known)} funciones desde el TOML.")
+    if known:
+        sample_addr = sorted(known)[0]
+        print(f"DEBUG: Dirección de ejemplo parseada: 0x{sample_addr:08x} ({sample_addr})")
+
+    # Rangos basados en segmentos PT_LOAD del ELF
+    ranges = [(seg["vaddr"], seg["vaddr"] + seg["memsz"]) for seg in elf.segments if seg["type"] == 1]
+    print(f"DEBUG: Rangos ejecutables detectados: {ranges}")
+
+    def in_ranges(addr, rngs):
+        return any(lo <= addr < hi for lo, hi in rngs)
+
+    filtered_known = set(a for a in known if in_ranges(a, ranges))
+    print(f"DEBUG: Funciones tras pasar el filtro in_ranges: {len(filtered_known)}")
+
+    known = filtered_known
 
     # Import stubs live in .sceStub.text. In the file each is "jr $ra; <placeholder>"; the
     # syscall is written into the delay slot by the loader at run time, so we cannot read it
