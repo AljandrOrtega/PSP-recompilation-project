@@ -105,10 +105,27 @@ def section_bytes(elf, s):
 
 def exec_ranges(elf):
     ranges = []
+
+    # 1. Intentar por nombre de sección estándar
     for name in EXEC_SECTIONS:
         s = elf.sec(name)
         if s and s["size"]:
             ranges.append((s["addr"], s["addr"] + s["size"]))
+
+    # 2. Si las secciones no tienen nombre (stripped ELF), filtrar secciones por sus FLAGS
+    if not ranges:
+        for s in elf.sections:
+            # SHF_EXECINSTR = 0x4 (instrucciones ejecutables)
+            if s["size"] > 0 and (s["flags"] & 4):
+                ranges.append((s["addr"], s["addr"] + s["size"]))
+
+    # 3. Si aún así no hay rangos, recurrir a los segmentos PT_LOAD ejecutables
+    if not ranges:
+        for seg in elf.segments:
+            # PT_LOAD = 1, PF_X = 1 (bit de ejecución)
+            if seg["type"] == 1 and (seg["flags"] & 1):
+                ranges.append((seg["vaddr"], seg["vaddr"] + seg["memsz"]))
+
     return ranges
 
 
@@ -179,6 +196,18 @@ def analyze(elf):
     # High-confidence function starts: addresses that are genuinely entered as a function,
     # not internal blocks. These seed the extent tracing below.
     hc = set()
+    import os
+    if os.path.exists("build/mygame/symbols.sym"):
+        with open("build/mygame/symbols.sym", "r") as f:
+            for line in f:
+                parts = line.strip().split()
+                if parts:
+                    try:
+                        addr = int(parts[0], 16)
+                        if in_ranges(addr, ranges):
+                            hc.add(addr)
+                    except ValueError:
+                        pass
     if in_ranges(elf.entry, ranges):
         hc.add(elf.entry)
 
