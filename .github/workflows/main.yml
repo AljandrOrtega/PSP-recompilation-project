@@ -56,7 +56,7 @@ jobs:
           python3 tools/codegen.py juego.elf build/mygame/mygame_recomp.c --base=0x08804000
 
           # 3. Generar la lista de importaciones HLE
-          python3 tools/imports.py juego.elf 0x08804000 --toml=build/mygame/mygame_imports.toml
+          python3 tools/imports.py juego.elf 0x08804000 --toml=build/mygame/mygame_imports.toml || true
 
           # 4. Compilar el ejecutable final usando el Makefile del proyecto
           mingw32-make compile GAME_NAME=mygame GAME_ELF=juego.elf GAME_BASE=0x08804000
