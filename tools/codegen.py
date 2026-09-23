@@ -781,7 +781,30 @@ def main(argv):
     elf = Elf(args[0], base=base)
     ranges = exec_ranges(elf)
     known, _ = analyze(elf)
+
+    # Cargar direcciones desde symbols.sym
+    sym_path = "build/mygame/symbols.sym"
+    import os
+    if os.path.exists(sym_path):
+        with open(sym_path, "r") as f:
+            for line in f:
+                line = line.strip().replace(",", " ")
+                parts = line.split()
+                if parts:
+                    try:
+                        addr = int(parts[0], 16)
+                        # Si las direcciones del sym son sin rebasar y usas base,
+                        # asegúrate de ajustar si es necesario.
+                        known.add(addr)
+                    except ValueError:
+                        pass
+
+    # Depuración: ver qué direcciones se están considerando
+    print(f"Rangos ejecutables detectados: {ranges}")
+    print(f"Total direcciones recolectadas antes de filtrar: {len(known)}")
+
     known = set(a for a in known if in_ranges(a, ranges))
+    print(f"Total direcciones dentro de los rangos ejecutables: {len(known)}")
 
     # Import stubs live in .sceStub.text. In the file each is "jr $ra; <placeholder>"; the
     # syscall is written into the delay slot by the loader at run time, so we cannot read it
