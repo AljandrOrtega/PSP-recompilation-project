@@ -1,10 +1,6 @@
 name: Build PSP Recompilation
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -44,19 +40,20 @@ jobs:
           # Descargar juego.elf en ./
           python3 -m gdown "1I-KyrF5wsIlYSjudIkYoVjMOq7R9W-q4" -O juego.elf
           # Descargar symbols.sym en ./build/mygame/
-          python3 -m gdown "1qTsWPpo7A8SS-QQT0gtKV2wk9EqTTgue" -O build/mygame/symbols.sym
+          python3 -m gdown "1AWTZF_OvQw-q99MQSwXnlRxNy_-X8OBH" -O map.txt
 
       - name: Run Recompilation Pipeline & Compile
         shell: msys2 {0}
         run: |
           # 1. Generar la imagen binaria de memoria
-          python3 tools/prxload.py juego.elf 0x08804000 --out=build/mygame/mygame_image.bin
+          python3 tools/prxload.py juego.elf 0x08804040 --out=build/mygame/mygame_image.bin
 
-          # 2. Generar el código C re-compilado desde el ELF y symbols.sym
-          python3 tools/codegen.py juego.elf build/mygame/mygame_recomp.c --base=0x08804000
-
-          # 3. Generar la lista de importaciones HLE
-          python3 tools/imports.py juego.elf 0x08804000 --toml=build/mygame/mygame_imports.toml || true
+          # 2. Generar la lista de importaciones HLE
+          python3 tools/imports.py juego.elf 0x08804040 --toml=build/mygame/mygame_imports.toml
+          
+          # 3. Generar el código C re-compilado desde el ELF y map.txt
+          python3 tools/map_to_toml.py
+          python3 tools/codegen.py juego.elf build/mygame/mygame_recomp.c --toml=build/mygame/functions.toml --base=0x08804040
 
           # 4. Compilar el ejecutable final usando el Makefile del proyecto
           mingw32-make compile GAME_NAME=mygame GAME_ELF=juego.elf GAME_BASE=0x08804000
