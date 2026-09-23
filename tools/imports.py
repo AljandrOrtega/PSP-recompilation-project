@@ -17,11 +17,67 @@ from analyze import Elf
 
 
 def parse_imports(elf):
+    libstub = None
+    libstubend = None
+
+    # 1. Intentar la vía estándar por sección ELF
     mi = elf.sec(".rodata.sceModuleInfo")
-    if not mi:
-        raise SystemExit("no .rodata.sceModuleInfo section")
-    b = elf.read_at_vaddr(mi["addr"], 52)
-    libstub, libstubend = struct.unpack("<2I", b[44:52])
+    if mi:
+        b = elf.read_at_vaddr(mi["addr"], 52)
+        libstub, libstubend = struct.unpack("<2I", b[44:52])
+    else:
+        # 2. Fallback: Buscar la firma de PspLibStubEntry en la memoria ejecutable
+        sys.stderr.write("Aviso: .rodata.sceModuleInfo no encontrada. Escaneando memoria ejecutable...\n")
+
+        # Obtener rango de direcciones virtuales del ELF
+        min_vaddr = None
+        max_vaddr = None
+
+        # Recorrer Program Headers para conocer los límites de memoria
+        if hasattr(elf, 'ph') and elf.ph:
+            for ph in elf.ph:
+                if ph.get('p_type') == 1: # PT_LOAD
+                    vaddr = ph['p_vaddr']
+                    memsz = ph['p_memsz']
+                    if min_vaddr is None or vaddr < min_vaddr:
+                        min_vaddr = vaddr
+                    if max_vaddr is None or (vaddr + memsz) > max_vaddr:
+                        max_vaddr = vaddr + memsz
+
+        # Si no hay PH, recurrir a las secciones
+        if min_vaddr is None and hasattr(elf, 'sections'):
+            for sec in elf.sections:
+                if sec['addr'] > 0 and sec['size'] > 0:
+                    if min_vaddr is None or sec['addr'] < min_vaddr:
+                        min_vaddr = sec['addr']
+                    if max_vaddr is None or (sec['addr'] + sec['size']) > max_vaddr:
+                        max_vaddr = sec['addr'] + sec['size']
+
+        if min_vaddr is None:
+            min_vaddr = 0x08804040
+            max_vaddr = min_vaddr + len(getattr(elf, 'data', getattr(elf, 'raw_bytes', b'')))
+
+        found_stubs = []
+        # Escanear alineado a 4 bytes
+        for addr in range(min_vaddr, max_vaddr - 28, 4):
+            try:
+                e = elf.read_at_vaddr(addr, 28)
+                if not e or len(e) < 28:
+                    continue
+                name_ptr, ver, flags, size, numVars, numFuncs, nidData, firstSym = struct.unpack("<IHHBBHII", e[:20])
+
+                # Validar valores típicos de PspLibStubEntry
+                if size == 5 and 0 < numFuncs < 2048:
+                    if (min_vaddr <= name_ptr < max_vaddr) and (min_vaddr <= nidData < max_vaddr) and (min_vaddr <= firstSym < max_vaddr):
+                        found_stubs.append(addr)
+            except Exception:
+                continue
+
+        if not found_stubs:
+            raise SystemExit("Error: No se encontraron tablas de importación PspLibStubEntry en la memoria del ELF.")
+
+        libstub = found_stubs[0]
+        libstubend = found_stubs[-1] + 20
 
     def r32(a):
         return struct.unpack("<I", elf.read_at_vaddr(a, 4))[0]
@@ -39,6 +95,8 @@ def parse_imports(elf):
     pos = libstub
     while pos < libstubend:
         e = elf.read_at_vaddr(pos, 28)
+        if not e or len(e) < 28:
+            break
         name_ptr, ver, flags, size, numVars, numFuncs, nidData, firstSym = struct.unpack(
             "<IHHBBHII", e[:20])
         if size == 0:
